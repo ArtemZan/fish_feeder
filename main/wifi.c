@@ -10,8 +10,26 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "sntp.h"
+#include "gpio.h"
 
 static const char *TAG = "ff_wifi";
+
+static int s_retry_num = 0;
+
+EventGroupHandle_t wifi_event_group;
+
+const int MAXIMUM_WIFI_RETRY = 100000;
+
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT BIT1
+
+void wifi_init_if_needed()
+{
+    if (!wifi_event_group)
+    {
+        wifi_event_group = xEventGroupCreate();
+    }
+}
 
 void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -22,7 +40,19 @@ void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, in
     }
     else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        esp_wifi_connect();
+        // gpio_turn_wifi_indicator(false);
+
+        if (s_retry_num < MAXIMUM_WIFI_RETRY)
+        {
+            vTaskDelay(10 * 1000 / portTICK_PERIOD_MS);
+            esp_wifi_connect();
+            s_retry_num++;
+        }
+        else
+        {
+            xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
+            s_retry_num = 0;
+        }
     }
 }
 
@@ -30,8 +60,11 @@ void ip_event_handler(void *event_handler_arg, esp_event_base_t event_base, int3
 {
     printf("IP event!: %d\n", (int)event_id);
 
-    if(event_id == IP_EVENT_STA_GOT_IP) {
+    if (event_id == IP_EVENT_STA_GOT_IP)
+    {
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
         obtain_time();
+        gpio_turn_wifi_indicator(true);
     }
 }
 
@@ -53,8 +86,10 @@ void ff_wifi_connect()
     wifi_init_sta();
 
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    
+
     ESP_ERROR_CHECK(esp_wifi_init(&config));
+
+    wifi_init_if_needed();
 
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL);
     esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &ip_event_handler, NULL);
@@ -62,16 +97,16 @@ void ff_wifi_connect()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     wifi_config_t sta_config = {
-		.sta = {
-			.threshold.authmode = WIFI_AUTH_WPA2_PSK,
-			.pmf_cfg = {
-				.capable = true,
-				.required = false},
-		},
-	};
+        .sta = {
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .pmf_cfg = {
+                .capable = true,
+                .required = false},
+        },
+    };
     strcpy((char *)sta_config.sta.ssid, "Artem");
     strcpy((char *)sta_config.sta.password, "12345678");
-    
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
 
     esp_wifi_start();

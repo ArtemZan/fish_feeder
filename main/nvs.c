@@ -18,7 +18,7 @@
 
 #include "nvs.h"
 
-const char *TAG = "nvs";
+static const char *TAG = "nvs";
 
 static nvs_handle_t nvs_cfg_handle;
 
